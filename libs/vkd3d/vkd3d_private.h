@@ -804,6 +804,7 @@ struct d3d12_resource
 
     /* To keep track of initial layout. */
     VkImageLayout common_layout;
+    D3D12_RESOURCE_STATES initial_state;
     uint32_t initial_layout_transition;
 
     struct d3d12_sparse_info sparse;
@@ -836,6 +837,19 @@ static inline bool d3d12_resource_is_texture(const struct d3d12_resource *resour
 static inline VkImageLayout d3d12_resource_pick_layout(const struct d3d12_resource *resource, VkImageLayout layout)
 {
     return resource->flags & VKD3D_RESOURCE_LINEAR_TILING ? VK_IMAGE_LAYOUT_GENERAL : layout;
+}
+
+static inline VkImageLayout d3d12_resource_get_outside_render_pass_color_layout(const struct d3d12_resource *resource)
+{
+    if (resource->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
+        return resource->common_layout;
+    else
+        return d3d12_resource_pick_layout(resource, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+}
+
+static inline VkImageLayout d3d12_resource_get_outside_render_pass_depth_stencil_layout(const struct d3d12_resource *resource)
+{
+    return resource->common_layout;
 }
 
 LONG64 vkd3d_allocate_cookie();
