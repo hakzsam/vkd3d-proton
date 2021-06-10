@@ -2626,12 +2626,35 @@ static unsigned int vkd3d_get_rt_format_swizzle(const struct vkd3d_format *forma
 
 STATIC_ASSERT(sizeof(struct vkd3d_shader_transform_feedback_element) == sizeof(D3D12_SO_DECLARATION_ENTRY));
 
+static VkImageAspectFlags vk_dsv_format_to_aspects(VkFormat vk_format)
+{
+    switch (vk_format)
+    {
+        case VK_FORMAT_D16_UNORM_S8_UINT:
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+
+        case VK_FORMAT_X8_D24_UNORM_PACK32:
+        case VK_FORMAT_D32_SFLOAT:
+        case VK_FORMAT_D16_UNORM:
+            return VK_IMAGE_ASPECT_DEPTH_BIT;
+
+        case VK_FORMAT_S8_UINT:
+            return VK_IMAGE_ASPECT_STENCIL_BIT;
+
+        default:
+            return 0;
+    }
+}
+
 static HRESULT d3d12_graphics_pipeline_state_create_render_pass(
         struct d3d12_graphics_pipeline_state *graphics, struct d3d12_device *device,
         VkFormat dynamic_dsv_format, VkRenderPass *vk_render_pass, VkImageLayout *dsv_layout,
         uint32_t variant_flags)
 {
     struct vkd3d_render_pass_key key;
+    VkImageAspectFlags aspects;
     VkFormat dsv_format;
     unsigned int i;
 
@@ -2644,19 +2667,49 @@ static HRESULT d3d12_graphics_pipeline_state_create_render_pass(
 
     if (dsv_format)
     {
+        aspects = vk_dsv_format_to_aspects(dsv_format);
+        assert(aspects);
         assert(graphics->ds_desc.front.writeMask == graphics->ds_desc.back.writeMask);
-        if (graphics->ds_desc.depthTestEnable || graphics->ds_desc.depthBoundsTestEnable)
+
+        if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
         {
-            key.flags |= VKD3D_RENDER_PASS_KEY_DEPTH_ENABLE;
-            if (graphics->ds_desc.depthWriteEnable)
-                key.flags |= VKD3D_RENDER_PASS_KEY_DEPTH_WRITE;
+            if (graphics->ds_desc.depthTestEnable || graphics->ds_desc.depthBoundsTestEnable)
+            {
+                key.flags |= VKD3D_RENDER_PASS_KEY_DEPTH_ENABLE;
+                if (graphics->ds_desc.depthWriteEnable)
+                    key.flags |= VKD3D_RENDER_PASS_KEY_DEPTH_WRITE;
+            }
         }
-        if (graphics->ds_desc.stencilTestEnable)
+
+        if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
         {
-            key.flags |= VKD3D_RENDER_PASS_KEY_STENCIL_ENABLE;
-            if (graphics->ds_desc.front.writeMask != 0)
-                key.flags |= VKD3D_RENDER_PASS_KEY_STENCIL_WRITE;
+            if (graphics->ds_desc.stencilTestEnable)
+            {
+                key.flags |= VKD3D_RENDER_PASS_KEY_STENCIL_ENABLE;
+                if (graphics->ds_desc.front.writeMask != 0)
+                    key.flags |= VKD3D_RENDER_PASS_KEY_STENCIL_WRITE;
+            }
         }
+
+        /* If our format does not have both aspects, use same state across the aspects so that we are more likely
+         * to match one of our common formats, DS_READ_ONLY or DS_OPTIMAL.
+         * Otherwise, we are very likely to hit the DS write / stencil read layout. */
+        if (!(aspects & VK_IMAGE_ASPECT_DEPTH_BIT))
+        {
+            key.flags |= (key.flags & VKD3D_RENDER_PASS_KEY_STENCIL_ENABLE) ?
+                    VKD3D_RENDER_PASS_KEY_DEPTH_ENABLE : 0;
+            key.flags |= (key.flags & VKD3D_RENDER_PASS_KEY_STENCIL_WRITE) ?
+                    VKD3D_RENDER_PASS_KEY_DEPTH_WRITE : 0;
+        }
+
+        if (!(aspects & VK_IMAGE_ASPECT_STENCIL_BIT))
+        {
+            key.flags |= (key.flags & VKD3D_RENDER_PASS_KEY_DEPTH_ENABLE) ?
+                    VKD3D_RENDER_PASS_KEY_STENCIL_ENABLE : 0;
+            key.flags |= (key.flags & VKD3D_RENDER_PASS_KEY_DEPTH_WRITE) ?
+                    VKD3D_RENDER_PASS_KEY_STENCIL_WRITE : 0;
+        }
+
         key.vk_formats[key.attachment_count++] = dsv_format;
     }
 
