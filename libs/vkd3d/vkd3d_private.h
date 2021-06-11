@@ -1324,7 +1324,7 @@ struct d3d12_graphics_pipeline_state
     unsigned int patch_vertex_count;
     VkFormat dsv_format;
     VkFormat rtv_formats[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
-    VkImageLayout dsv_layout;
+    VkImageLayout conservative_dsv_layout;
     VkRenderPass render_pass[VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_COUNT];
 
     D3D12_INDEX_BUFFER_STRIP_CUT_VALUE index_buffer_strip_cut_value;

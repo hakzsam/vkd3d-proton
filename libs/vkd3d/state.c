@@ -2663,7 +2663,7 @@ static VkImageAspectFlags vk_dsv_format_to_aspects(VkFormat vk_format)
 
 static HRESULT d3d12_graphics_pipeline_state_create_render_pass(
         struct d3d12_graphics_pipeline_state *graphics, struct d3d12_device *device,
-        VkFormat dynamic_dsv_format, VkRenderPass *vk_render_pass, VkImageLayout *dsv_layout,
+        VkFormat dynamic_dsv_format, VkRenderPass *vk_render_pass, VkImageLayout *conservative_dsv_layout,
         uint32_t variant_flags)
 {
     struct vkd3d_render_pass_key key;
@@ -2736,8 +2736,18 @@ static HRESULT d3d12_graphics_pipeline_state_create_render_pass(
 
     key.sample_count = graphics->ms_desc.rasterizationSamples;
 
-    if (dsv_layout)
-        *dsv_layout = vkd3d_render_pass_get_depth_stencil_layout(&key);
+    /* Here we want to know the DSV layout which we might have to use if we don't know anything about
+     * the image layout of the depth-stencil attachment.
+     * If we disable writes to depth or stencil aspects, it would be valid for
+     * a shader to read from that attachment while rendering.
+     * Of course, this is only actually valid if the attachment is actually
+     * in the DEPTH_READ | RESOURCE state. If we can deduce that this is not the case,
+     * e.g. we observe a barrier to DEPTH_WRITE, a DiscardResource(), or ClearDSV(),
+     * we prove DEPTH_WRITE, and we would be able to keep using ATTACHMENT_OPTIMAL layouts in theory.
+     * Vulkan render pass compatibility rules allows us to change
+     * initialLayout, finalLayout and attachment reference layouts. */
+    if (conservative_dsv_layout)
+        *conservative_dsv_layout = vkd3d_render_pass_get_depth_stencil_layout(&key);
 
     return vkd3d_render_pass_cache_find(&device->render_pass_cache, device, &key, vk_render_pass);
 }
@@ -3422,7 +3432,7 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
                 continue;
 
             if (FAILED(hr = d3d12_graphics_pipeline_state_create_render_pass(graphics,
-                device, 0, &graphics->render_pass[i], &graphics->dsv_layout, i)))
+                device, 0, &graphics->render_pass[i], &graphics->conservative_dsv_layout, i)))
                 goto fail;
         }
     }
@@ -3785,7 +3795,7 @@ VkPipeline d3d12_pipeline_state_create_pipeline_variant(struct d3d12_pipeline_st
         TRACE("Compiling %p with fallback DSV format %#x.\n", state, dsv_format);
 
     if (FAILED(hr = d3d12_graphics_pipeline_state_create_render_pass(graphics, device, dsv_format,
-            &pipeline_desc.renderPass, &graphics->dsv_layout, variant_flags)))
+            &pipeline_desc.renderPass, &graphics->conservative_dsv_layout, variant_flags)))
         return VK_NULL_HANDLE;
 
     *vk_render_pass = pipeline_desc.renderPass;

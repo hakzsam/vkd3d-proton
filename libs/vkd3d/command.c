@@ -4299,7 +4299,7 @@ static bool d3d12_command_list_update_graphics_pipeline(struct d3d12_command_lis
         if (list->current_render_pass || list->render_pass_suspended)
             d3d12_command_list_invalidate_current_render_pass(list);
         /* Only override this after ending the render pass. */
-        list->dsv_layout = list->state->graphics.dsv_layout;
+        list->dsv_layout = list->state->graphics.conservative_dsv_layout;
     }
 
     if (list->command_buffer_pipeline != vk_pipeline)
