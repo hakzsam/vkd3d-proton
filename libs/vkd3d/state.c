@@ -3443,18 +3443,15 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
 
     /* If we have DSV attachment,
      * create compatible render passes that we can use with DSV optimal if we can deduce the optimization. */
-    if (graphics->conservative_dsv_layout != VK_IMAGE_LAYOUT_UNDEFINED)
+    for (i = 0; i < VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_COUNT; i++)
     {
-        for (i = 0; i < VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_COUNT; i++)
-        {
-            if (!d3d12_is_valid_pipeline_variant(device, i))
-                continue;
+        if (!d3d12_is_valid_pipeline_variant(device, i))
+            continue;
 
-            if (FAILED(hr = d3d12_graphics_pipeline_state_create_render_pass(graphics,
-                    device, 0, &graphics->dsv_optimal_render_pass[i], NULL,
-                    i | VKD3D_GRAPHICS_PIPELINE_DEPTH_STENCIL_OPTIMAL_LAYOUT)))
-                goto fail;
-        }
+        if (FAILED(hr = d3d12_graphics_pipeline_state_create_render_pass(graphics,
+                device, 0, &graphics->dsv_optimal_render_pass[i], NULL,
+                i | VKD3D_GRAPHICS_PIPELINE_DEPTH_STENCIL_OPTIMAL_LAYOUT)))
+            goto fail;
     }
 
     list_init(&graphics->compiled_fallback_pipelines);

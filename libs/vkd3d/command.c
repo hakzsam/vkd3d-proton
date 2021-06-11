@@ -2071,6 +2071,13 @@ static void d3d12_command_list_clear_attachment_inline(struct d3d12_command_list
     }
 }
 
+static bool d3d12_command_list_depth_stencil_resource_is_attachment_optimal(const struct d3d12_command_list *list,
+        const struct d3d12_resource *resource)
+{
+    /* TODO: Query the command list for known resources which are in optimal state. */
+    return !!(resource->desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE);
+}
+
 static void d3d12_command_list_clear_attachment_pass(struct d3d12_command_list *list, struct d3d12_resource *resource,
         struct vkd3d_view *view, VkImageAspectFlags clear_aspects, const VkClearValue *clear_value, UINT rect_count,
         const D3D12_RECT *rects, bool is_bound)
@@ -2103,7 +2110,9 @@ static void d3d12_command_list_clear_attachment_pass(struct d3d12_command_list *
     attachment_desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
     if (clear_aspects & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
     {
-        if (is_bound)
+        if (d3d12_command_list_depth_stencil_resource_is_attachment_optimal(list, resource))
+            attachment_desc.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        else if (is_bound)
             attachment_desc.initialLayout = list->dsv_layout;
         else
             attachment_desc.initialLayout = d3d12_resource_get_outside_render_pass_depth_stencil_layout(resource);
@@ -2305,9 +2314,15 @@ static void d3d12_command_list_discard_attachment_barrier(struct d3d12_command_l
     {
         stages = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        layout = is_bound && list->dsv_layout ?
-                list->dsv_layout :
-                d3d12_resource_get_outside_render_pass_depth_stencil_layout(resource);
+
+        if (d3d12_command_list_depth_stencil_resource_is_attachment_optimal(list, resource))
+            layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        else
+        {
+            layout = is_bound && list->dsv_layout ?
+                    list->dsv_layout :
+                    d3d12_resource_get_outside_render_pass_depth_stencil_layout(resource);
+        }
     }
     else
     {
@@ -2488,7 +2503,8 @@ static bool d3d12_resource_requires_shader_visibility_after_transition(
                     new_layout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL);
 }
 
-static VkPipelineStageFlags vk_render_pass_barrier_from_view(const struct vkd3d_view *view, const struct d3d12_resource *resource,
+static VkPipelineStageFlags vk_render_pass_barrier_from_view(struct d3d12_command_list *list,
+        const struct vkd3d_view *view, const struct d3d12_resource *resource,
         enum vkd3d_render_pass_transition_mode mode, VkImageLayout layout, bool clear, VkImageMemoryBarrier *vk_barrier)
 {
     VkImageLayout outside_render_pass_layout;
@@ -2513,7 +2529,10 @@ static VkPipelineStageFlags vk_render_pass_barrier_from_view(const struct vkd3d_
          * we map DEPTH_READ and DEPTH_WRITE to read-only, and transition in and out of depth write state
          * as required.
          * Common layout for depth images will be either read-only depth or read-write depth. */
-        outside_render_pass_layout = d3d12_resource_get_outside_render_pass_depth_stencil_layout(resource);
+        if (d3d12_command_list_depth_stencil_resource_is_attachment_optimal(list, resource))
+            outside_render_pass_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        else
+            outside_render_pass_layout = d3d12_resource_get_outside_render_pass_depth_stencil_layout(resource);
     }
 
     vk_barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -2609,7 +2628,7 @@ static void d3d12_command_list_emit_render_pass_transition(struct d3d12_command_
         if (mode == VKD3D_RENDER_PASS_TRANSITION_MODE_BEGIN)
             do_clear = d3d12_command_list_has_render_pass_rtv_clear(list, i);
 
-        if ((new_stages = vk_render_pass_barrier_from_view(rtv->view, rtv->resource,
+        if ((new_stages = vk_render_pass_barrier_from_view(list, rtv->view, rtv->resource,
                 mode, VK_IMAGE_LAYOUT_UNDEFINED, do_clear, &vk_image_barriers[j])))
         {
             stage_mask |= new_stages;
@@ -2624,7 +2643,7 @@ static void d3d12_command_list_emit_render_pass_transition(struct d3d12_command_
         if (mode == VKD3D_RENDER_PASS_TRANSITION_MODE_BEGIN)
             do_clear = d3d12_command_list_has_render_pass_dsv_clear(list);
 
-        if ((new_stages = vk_render_pass_barrier_from_view(dsv->view, dsv->resource,
+        if ((new_stages = vk_render_pass_barrier_from_view(list, dsv->view, dsv->resource,
                 mode, list->dsv_layout, do_clear, &vk_image_barriers[j])))
         {
             stage_mask |= new_stages;
@@ -4260,6 +4279,7 @@ static bool d3d12_command_list_update_graphics_pipeline(struct d3d12_command_lis
     const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
     VkRenderPass vk_render_pass;
     uint32_t new_active_flags;
+    bool dsv_optimal = false;
     VkPipeline vk_pipeline;
     uint32_t variant_flags;
     VkFormat dsv_format;
@@ -4287,6 +4307,29 @@ static bool d3d12_command_list_update_graphics_pipeline(struct d3d12_command_lis
                 &vk_render_pass, &new_active_flags, variant_flags)))
             return false;
     }
+    else
+    {
+        /* If current DSV layout is attachment optimal, we have somehow been able to prove
+         * that the DSV cannot be read in a shader due to resource states,
+         * and thus we can keep going with an attachment optimal
+         * render pass, even if read/write masks are FALSE.
+         *
+         * There are some scenarios where this comes into play:
+         * - We have seen a pipeline which enabled write to all attachments.
+         *   This is only valid in DEPTH_WRITE.
+         * - We have observed a DiscardResource() or ClearDSV() which touched all aspects in the DSV.
+         *   This is only valid in DEPTH_WRITE.
+         * For this case, we only need to consider compatible render passes,
+         * rather than conservative render pass from PSO.
+         *
+         * Do not consider this path for fallback pipelines, since depth format might have
+         * changed, and the render pass in question is invalid. */
+        if (list->dsv_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        {
+            vk_render_pass = list->state->graphics.dsv_optimal_render_pass[variant_flags];
+            dsv_optimal = true;
+        }
+    }
 
     /* The render pass cache ensures that we use the same Vulkan render pass
      * object for compatible render passes. */
@@ -4298,9 +4341,12 @@ static bool d3d12_command_list_update_graphics_pipeline(struct d3d12_command_lis
          * deferred clears are not going to work as intended. */
         if (list->current_render_pass || list->render_pass_suspended)
             d3d12_command_list_invalidate_current_render_pass(list);
-        /* Only override this after ending the render pass. */
-        list->dsv_layout = list->state->graphics.conservative_dsv_layout;
     }
+
+    /* Only override this after ending the render pass.
+     * If we know it's okay to be optimal, stay optimal. */
+    if (!dsv_optimal)
+        list->dsv_layout = list->state->graphics.conservative_dsv_layout;
 
     if (list->command_buffer_pipeline != vk_pipeline)
     {
@@ -7297,6 +7343,8 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(d3d12_comman
 
     memset(list->rtvs, 0, sizeof(list->rtvs));
     memset(&list->dsv, 0, sizeof(list->dsv));
+    /* Need to deduce DSV layouts again. */
+    list->dsv_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     for (i = 0; i < render_target_descriptor_count; ++i)
     {
@@ -7336,6 +7384,10 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(d3d12_comman
             list->fb_height = min(list->fb_height, rtv_desc->height);
             list->fb_layer_count = min(list->fb_layer_count, rtv_desc->layer_count);
             next_dsv_format = rtv_desc->format->vk_format;
+
+            /* If we know this for sure, just go ahead and keep the attachment optimal. */
+            if (d3d12_command_list_depth_stencil_resource_is_attachment_optimal(list, rtv_desc->resource))
+                list->dsv_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         }
         else
         {
