@@ -1295,6 +1295,9 @@ enum vkd3d_graphics_pipeline_static_variant_flag
 {
     VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_VRS_ATTACHMENT = (1u << 0),
     VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_LAST_BIT       = (1u << 1),
+
+    /* Not part of pipeline state, only affects compatible render pass state. */
+    VKD3D_GRAPHICS_PIPELINE_DEPTH_STENCIL_OPTIMAL_LAYOUT  = (1u << 16)
 };
 
 #define VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_COUNT ((uint32_t)VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_LAST_BIT)
@@ -1326,6 +1329,7 @@ struct d3d12_graphics_pipeline_state
     VkFormat rtv_formats[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
     VkImageLayout conservative_dsv_layout;
     VkRenderPass render_pass[VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_COUNT];
+    VkRenderPass dsv_optimal_render_pass[VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_COUNT];
 
     D3D12_INDEX_BUFFER_STRIP_CUT_VALUE index_buffer_strip_cut_value;
     VkPipelineRasterizationStateCreateInfo rs_desc;

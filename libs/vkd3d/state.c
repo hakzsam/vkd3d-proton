@@ -2686,7 +2686,9 @@ static HRESULT d3d12_graphics_pipeline_state_create_render_pass(
 
         if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
         {
-            if (graphics->ds_desc.depthTestEnable || graphics->ds_desc.depthBoundsTestEnable)
+            if (variant_flags & VKD3D_GRAPHICS_PIPELINE_DEPTH_STENCIL_OPTIMAL_LAYOUT)
+                key.flags |= VKD3D_RENDER_PASS_KEY_DEPTH_ENABLE | VKD3D_RENDER_PASS_KEY_DEPTH_WRITE;
+            else if (graphics->ds_desc.depthTestEnable || graphics->ds_desc.depthBoundsTestEnable)
             {
                 key.flags |= VKD3D_RENDER_PASS_KEY_DEPTH_ENABLE;
                 if (graphics->ds_desc.depthWriteEnable)
@@ -2696,7 +2698,9 @@ static HRESULT d3d12_graphics_pipeline_state_create_render_pass(
 
         if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
         {
-            if (graphics->ds_desc.stencilTestEnable)
+            if (variant_flags & VKD3D_GRAPHICS_PIPELINE_DEPTH_STENCIL_OPTIMAL_LAYOUT)
+                key.flags |= VKD3D_RENDER_PASS_KEY_STENCIL_ENABLE | VKD3D_RENDER_PASS_KEY_STENCIL_WRITE;
+            else if (graphics->ds_desc.stencilTestEnable)
             {
                 key.flags |= VKD3D_RENDER_PASS_KEY_STENCIL_ENABLE;
                 if (graphics->ds_desc.front.writeMask != 0)
@@ -3433,6 +3437,22 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
 
             if (FAILED(hr = d3d12_graphics_pipeline_state_create_render_pass(graphics,
                 device, 0, &graphics->render_pass[i], &graphics->conservative_dsv_layout, i)))
+                goto fail;
+        }
+    }
+
+    /* If we have DSV attachment,
+     * create compatible render passes that we can use with DSV optimal if we can deduce the optimization. */
+    if (graphics->conservative_dsv_layout != VK_IMAGE_LAYOUT_UNDEFINED)
+    {
+        for (i = 0; i < VKD3D_GRAPHICS_PIPELINE_STATIC_VARIANT_COUNT; i++)
+        {
+            if (!d3d12_is_valid_pipeline_variant(device, i))
+                continue;
+
+            if (FAILED(hr = d3d12_graphics_pipeline_state_create_render_pass(graphics,
+                    device, 0, &graphics->dsv_optimal_render_pass[i], NULL,
+                    i | VKD3D_GRAPHICS_PIPELINE_DEPTH_STENCIL_OPTIMAL_LAYOUT)))
                 goto fail;
         }
     }
