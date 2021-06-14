@@ -1810,6 +1810,10 @@ struct d3d12_command_list
 
     struct d3d12_resource *vrs_image;
 
+    struct d3d12_resource **dsv_optimal_resources;
+    size_t dsv_optimal_resource_count;
+    size_t dsv_optimal_resource_size;
+
     struct vkd3d_private_store private_store;
 };
 
