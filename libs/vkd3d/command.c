@@ -2116,6 +2116,7 @@ static void d3d12_command_list_clear_attachment_pass(struct d3d12_command_list *
             attachment_desc.initialLayout = list->dsv_layout;
         else
             attachment_desc.initialLayout = d3d12_resource_get_outside_render_pass_depth_stencil_layout(resource);
+        attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     }
     else
     {
@@ -2123,13 +2124,13 @@ static void d3d12_command_list_clear_attachment_pass(struct d3d12_command_list *
             attachment_desc.initialLayout = d3d12_resource_pick_layout(resource, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         else
             attachment_desc.initialLayout = d3d12_resource_get_outside_render_pass_color_layout(resource);
+        attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     }
     attachment_desc.finalLayout = attachment_desc.initialLayout;
 
     attachment_ref.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2_KHR;
     attachment_ref.pNext = NULL;
     attachment_ref.attachment = 0;
-    attachment_ref.layout = view->info.texture.vk_layout;
     attachment_ref.aspectMask = 0; /* input attachment aspect mask */
 
     subpass_desc.sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2_KHR;
@@ -2511,9 +2512,6 @@ static VkPipelineStageFlags vk_render_pass_barrier_from_view(struct d3d12_comman
     VkPipelineStageFlags stages;
     VkAccessFlags access;
 
-    if (!layout)
-        layout = view->info.texture.vk_layout;
-
     if (view->format->vk_aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT)
     {
         stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -2629,7 +2627,7 @@ static void d3d12_command_list_emit_render_pass_transition(struct d3d12_command_
             do_clear = d3d12_command_list_has_render_pass_rtv_clear(list, i);
 
         if ((new_stages = vk_render_pass_barrier_from_view(list, rtv->view, rtv->resource,
-                mode, VK_IMAGE_LAYOUT_UNDEFINED, do_clear, &vk_image_barriers[j])))
+                mode, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, do_clear, &vk_image_barriers[j])))
         {
             stage_mask |= new_stages;
             j++;
@@ -5522,7 +5520,6 @@ static void d3d12_command_list_copy_image(struct d3d12_command_list *list,
         memset(&dst_view_desc, 0, sizeof(dst_view_desc));
         dst_view_desc.image = dst_resource->res.vk_image;
         dst_view_desc.view_type = pipeline_key.view_type;
-        dst_view_desc.layout = dst_layout;
         dst_view_desc.format = dst_format;
         dst_view_desc.miplevel_idx = region->dstSubresource.mipLevel;
         dst_view_desc.miplevel_count = 1;
@@ -5534,7 +5531,6 @@ static void d3d12_command_list_copy_image(struct d3d12_command_list *list,
         memset(&src_view_desc, 0, sizeof(src_view_desc));
         src_view_desc.image = src_resource->res.vk_image;
         src_view_desc.view_type = pipeline_key.view_type;
-        src_view_desc.layout = src_layout;
         src_view_desc.format = src_format;
         src_view_desc.miplevel_idx = region->srcSubresource.mipLevel;
         src_view_desc.miplevel_count = 1;
@@ -5612,7 +5608,7 @@ static void d3d12_command_list_copy_image(struct d3d12_command_list *list,
 
         vk_image_info.sampler = VK_NULL_HANDLE;
         vk_image_info.imageView = src_view->vk_image_view;
-        vk_image_info.imageLayout = src_view_desc.layout;
+        vk_image_info.imageLayout = src_layout;
 
         vk_descriptor_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         vk_descriptor_write.pNext = NULL;
@@ -7569,7 +7565,7 @@ static void d3d12_command_list_clear_uav(struct d3d12_command_list *list, const 
         assert(args->has_view);
         image_info.sampler = VK_NULL_HANDLE;
         image_info.imageView = args->u.view->vk_image_view;
-        image_info.imageLayout = args->u.view->info.texture.vk_layout;
+        image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
         write_set.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         write_set.pImageInfo = &image_info;
@@ -7810,7 +7806,6 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearUnorderedAccessViewUint(d3
 
             view_desc.image = resource_impl->res.vk_image;
             view_desc.view_type = base_view->info.texture.vk_view_type;
-            view_desc.layout = base_view->info.texture.vk_layout;
             view_desc.format = uint_format;
             view_desc.miplevel_idx = base_view->info.texture.miplevel_idx;
             view_desc.miplevel_count = 1;

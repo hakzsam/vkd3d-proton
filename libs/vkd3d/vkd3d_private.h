@@ -920,7 +920,6 @@ struct vkd3d_view
         struct
         {
             VkImageViewType vk_view_type;
-            VkImageLayout vk_layout;
             unsigned int miplevel_idx;
             unsigned int layer_idx;
             unsigned int layer_count;
@@ -943,7 +942,6 @@ struct vkd3d_texture_view_desc
 {
     VkImage image;
     VkImageViewType view_type;
-    VkImageLayout layout;
     VkImageAspectFlags aspect_mask;
     const struct vkd3d_format *format;
     unsigned int miplevel_idx;
