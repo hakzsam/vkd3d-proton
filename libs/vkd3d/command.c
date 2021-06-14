@@ -2649,6 +2649,10 @@ static void d3d12_command_list_emit_render_pass_transition(struct d3d12_command_
         }
     }
 
+    /* Need to deduce DSV layouts again before we start a new render pass. */
+    if (mode == VKD3D_RENDER_PASS_TRANSITION_MODE_END)
+        list->dsv_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
     /* Ignore VRS targets. They have to be in the appropriate resource state here. */
 
     if (!j)
@@ -4961,6 +4965,20 @@ static void d3d12_command_list_update_dynamic_state(struct d3d12_command_list *l
     dyn_state->dirty_flags = 0;
 }
 
+static void d3d12_command_list_promote_dsv_layout(struct d3d12_command_list *list)
+{
+    /* If we know at this point that the image is DSV optimal, promote the layout
+     * so that we can select the appropriate render pass and ignore any
+     * read-state shenanigans. If we cannot promote, the pipeline will override dsv_layout as required
+     * by write enable bits. */
+    if (list->dsv_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+            list->dsv.resource &&
+            d3d12_command_list_depth_stencil_resource_is_attachment_optimal(list, list->dsv.resource))
+    {
+        list->dsv_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    }
+}
+
 static bool d3d12_command_list_begin_render_pass(struct d3d12_command_list *list)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
@@ -4969,6 +4987,7 @@ static bool d3d12_command_list_begin_render_pass(struct d3d12_command_list *list
     VkRenderPassBeginInfo begin_desc;
     VkRenderPass vk_render_pass;
 
+    d3d12_command_list_promote_dsv_layout(list);
     if (!d3d12_command_list_update_graphics_pipeline(list))
         return false;
     if (!d3d12_command_list_update_current_framebuffer(list))
@@ -7380,10 +7399,6 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(d3d12_comman
             list->fb_height = min(list->fb_height, rtv_desc->height);
             list->fb_layer_count = min(list->fb_layer_count, rtv_desc->layer_count);
             next_dsv_format = rtv_desc->format->vk_format;
-
-            /* If we know this for sure, just go ahead and keep the attachment optimal. */
-            if (d3d12_command_list_depth_stencil_resource_is_attachment_optimal(list, rtv_desc->resource))
-                list->dsv_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         }
         else
         {
