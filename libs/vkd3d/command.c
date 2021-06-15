@@ -32,6 +32,14 @@ static void d3d12_command_queue_add_submission(struct d3d12_command_queue *queue
 static void d3d12_fence_inc_ref(struct d3d12_fence *fence);
 static void d3d12_fence_dec_ref(struct d3d12_fence *fence);
 
+static void d3d12_command_list_add_optimal_dsv_resource(struct d3d12_command_list *list,
+        struct d3d12_resource *resource);
+static void d3d12_command_list_remove_optimal_dsv_resource(struct d3d12_command_list *list,
+        struct d3d12_resource *resource);
+static bool d3d12_command_list_notify_dsv_transition(struct d3d12_command_list *list,
+        struct d3d12_resource *resource, const struct vkd3d_view *view,
+        VkImageLayout dsv_layout);
+
 static HRESULT vkd3d_create_binary_semaphore(struct d3d12_device *device, VkSemaphore *vk_semaphore)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
@@ -2122,6 +2130,11 @@ static void d3d12_command_list_clear_attachment_pass(struct d3d12_command_list *
         else
             attachment_desc.initialLayout = d3d12_resource_get_outside_render_pass_depth_stencil_layout(resource);
         attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachment_desc.finalLayout = attachment_desc.initialLayout;
+
+        /* Try to promote to optimal state here if we can. */
+        if (d3d12_command_list_notify_dsv_transition(list, resource, view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL))
+            attachment_desc.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     }
     else
     {
@@ -2130,8 +2143,8 @@ static void d3d12_command_list_clear_attachment_pass(struct d3d12_command_list *
         else
             attachment_desc.initialLayout = d3d12_resource_get_outside_render_pass_color_layout(resource);
         attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment_desc.finalLayout = attachment_desc.initialLayout;
     }
-    attachment_desc.finalLayout = attachment_desc.initialLayout;
 
     attachment_ref.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2_KHR;
     attachment_ref.pNext = NULL;
@@ -2652,6 +2665,9 @@ static void d3d12_command_list_emit_render_pass_transition(struct d3d12_command_
             stage_mask |= new_stages;
             j++;
         }
+
+        if (mode == VKD3D_RENDER_PASS_TRANSITION_MODE_BEGIN)
+            d3d12_command_list_notify_dsv_transition(list, dsv->resource, dsv->view, list->dsv_layout);
     }
 
     /* Need to deduce DSV layouts again before we start a new render pass. */
@@ -3882,6 +3898,41 @@ static void d3d12_command_list_add_optimal_dsv_resource(struct d3d12_command_lis
     vkd3d_array_reserve((void **)&list->dsv_optimal_resources, &list->dsv_optimal_resource_size,
             list->dsv_optimal_resource_count + 1, sizeof(*list->dsv_optimal_resources));
     list->dsv_optimal_resources[list->dsv_optimal_resource_count++] = resource;
+}
+
+static bool d3d12_command_list_notify_dsv_transition(struct d3d12_command_list *list,
+        struct d3d12_resource *resource, const struct vkd3d_view *view, VkImageLayout layout)
+{
+    /* Promote or demote optimal state. */
+    if (list->dsv_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+    {
+        /* If we cover the entire resource, we can promote it. */
+        if (view->info.texture.layer_count == resource->desc.DepthOrArraySize &&
+                resource->desc.MipLevels == 1)
+        {
+            d3d12_command_list_add_optimal_dsv_resource(list, resource);
+            return true;
+        }
+    }
+    else
+        d3d12_command_list_remove_optimal_dsv_resource(list, resource);
+
+    return false;
+}
+
+static void d3d12_command_list_notify_dsv_state(struct d3d12_command_list *list,
+        struct d3d12_resource *resource, D3D12_RESOURCE_STATES state, UINT subresource)
+{
+    /* Need to decide if we should promote or decay or promote DSV optimal state.
+     * We can promote if we know for sure that all subresources are optimal.
+     * If we observe any barrier which leaves this state, we must decay. */
+    bool dsv_optimal = state == D3D12_RESOURCE_STATE_DEPTH_READ ||
+            state == D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+    if (!dsv_optimal)
+        d3d12_command_list_remove_optimal_dsv_resource(list, resource);
+    else if (subresource == D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES)
+        d3d12_command_list_add_optimal_dsv_resource(list, resource);
 }
 
 static void d3d12_command_list_decay_optimal_dsv_resources(struct d3d12_command_list *list)
@@ -6710,16 +6761,8 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(d3d12_command_l
 
                 if (preserve_resource->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
                 {
-                    /* Need to decide if we should promote or decay or promote DSV optimal state.
-                     * We can promote if we know for sure that all subresources are optimal.
-                     * If we observe any barrier which leaves this state, we must decay. */
-                    after_dsv_optimal = (transition->StateAfter == D3D12_RESOURCE_STATE_DEPTH_READ ||
-                            transition->StateAfter == D3D12_RESOURCE_STATE_DEPTH_WRITE);
-
-                    if (!after_dsv_optimal)
-                        d3d12_command_list_remove_optimal_dsv_resource(list, preserve_resource);
-                    else if (transition->Subresource == D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES)
-                        d3d12_command_list_add_optimal_dsv_resource(list, preserve_resource);
+                    d3d12_command_list_notify_dsv_state(list, preserve_resource,
+                            transition->StateAfter, transition->Subresource);
                 }
 
                 vk_access_and_stage_flags_from_d3d12_resource_state(list, preserve_resource,
@@ -8004,7 +8047,9 @@ static void STDMETHODCALLTYPE d3d12_command_list_DiscardResource(d3d12_command_l
     struct d3d12_resource *texture = unsafe_impl_from_ID3D12Resource(resource);
     unsigned int i, first_subresource, subresource_count;
     VkImageSubresourceLayers vk_subresource_layers;
+    unsigned int resource_subresource_count;
     VkImageSubresource vk_subresource;
+    bool can_promote_dsv_optimal = false;
     D3D12_RECT full_rect;
     int attachment_idx;
     bool full_discard;
@@ -8034,6 +8079,7 @@ static void STDMETHODCALLTYPE d3d12_command_list_DiscardResource(d3d12_command_l
 
     /* Assume that pRegion == NULL means that we should discard
      * the entire resource. This does not seem to be documented. */
+    resource_subresource_count = d3d12_resource_desc_get_sub_resource_count(&texture->desc);
     if (region)
     {
         first_subresource = region->FirstSubresource;
@@ -8042,8 +8088,15 @@ static void STDMETHODCALLTYPE d3d12_command_list_DiscardResource(d3d12_command_l
     else
     {
         first_subresource = 0;
-        subresource_count = d3d12_resource_desc_get_sub_resource_count(&texture->desc);
+        subresource_count = resource_subresource_count;
     }
+
+    /* If we write to all subresources, we can promote the depth image to OPTIMAL since we know the resource
+     * must be in OPTIMAL state. */
+    can_promote_dsv_optimal = subresource_count == resource_subresource_count &&
+            (texture->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    if (can_promote_dsv_optimal)
+        d3d12_command_list_add_optimal_dsv_resource(list, texture);
 
     /* We can't meaningfully discard sub-regions of an image. If rects
      * are specified, all specified subresources must have the same
