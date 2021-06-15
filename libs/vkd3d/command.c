@@ -3851,6 +3851,11 @@ static void d3d12_command_list_remove_optimal_dsv_resource(struct d3d12_command_
         struct d3d12_resource *resource)
 {
     size_t i, n;
+
+    /* No point in adding these since they are always deduced to be optimal. */
+    if (resource->desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)
+        return;
+
     for (i = 0, n = list->dsv_optimal_resource_count; i < n; i++)
     {
         if (list->dsv_optimal_resources[i] == resource)
@@ -3865,6 +3870,11 @@ static void d3d12_command_list_add_optimal_dsv_resource(struct d3d12_command_lis
         struct d3d12_resource *resource)
 {
     size_t i, n;
+
+    /* No point in adding these since they are always deduced to be optimal. */
+    if (resource->desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)
+        return;
+
     for (i = 0, n = list->dsv_optimal_resource_count; i < n; i++)
         if (list->dsv_optimal_resources[i] == resource)
             return;
