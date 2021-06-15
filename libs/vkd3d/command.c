@@ -3904,7 +3904,7 @@ static bool d3d12_command_list_notify_dsv_transition(struct d3d12_command_list *
         struct d3d12_resource *resource, const struct vkd3d_view *view, VkImageLayout layout)
 {
     /* Promote or demote optimal state. */
-    if (list->dsv_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+    if (layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
     {
         /* If we cover the entire resource, we can promote it. */
         if (view->info.texture.layer_count == resource->desc.DepthOrArraySize &&
