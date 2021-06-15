@@ -6732,7 +6732,6 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(d3d12_command_l
                 VkPipelineStageFlags transition_dst_stage_mask = 0;
                 VkImageLayout old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
                 VkImageLayout new_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-                bool after_dsv_optimal;
 
                 if (!is_valid_resource_state(transition->StateBefore))
                 {
