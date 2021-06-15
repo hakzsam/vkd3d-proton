@@ -6863,6 +6863,11 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(d3d12_command_l
                     if (after && d3d12_resource_is_texture(after))
                     {
                         VkImageMemoryBarrier vk_alias_barrier;
+
+                        /* We'll see a DiscardResource later anyways which should make the resource optimal. */
+                        if (after->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+                            d3d12_command_list_remove_optimal_dsv_resource(list, after);
+
                         vk_image_memory_barrier_for_after_aliasing_barrier(list->device, list->vk_queue_flags,
                                 after, &vk_alias_barrier);
                         d3d12_command_list_barrier_batch_add_layout_transition(list, &batch, &vk_alias_barrier);
